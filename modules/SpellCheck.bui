@@ -1,0 +1,145 @@
+Public Function SpellCheckSupported() As Boolean
+    #If TargetMac Then
+        Return True
+    #Else
+        Return False
+    #End If
+End Function
+
+#If TargetMac Then
+    Private Declare Function NativeClass Lib "objc" Alias "objc_getClass" (name As String) As Ptr
+    Private Declare Function Allocate Lib "Foundation" Selector "alloc" (cls As Ptr) As Ptr
+    Private Declare Function InitObject Lib "Foundation" Selector "init" (object As Ptr) As Ptr
+    Private Declare Function NewPool Lib "Foundation" Selector "new" (cls As Ptr) As Ptr
+    Private Declare Sub DrainPool Lib "Foundation" Selector "drain" (pool As Ptr)
+    Private Declare Sub ReleaseObject Lib "CoreFoundation" Alias "CFRelease" (value As Ptr)
+    Private Function NativeText(value As Ptr) As String
+        If value = Nil Then Return ""
+        Return CType(CType(value, CFStringRef), String)
+    End Function
+    Private Declare Function ArrayCount Lib "Foundation" Selector "count" (nativeArray As Ptr) As Integer
+    Private Declare Function ArrayItem Lib "Foundation" Selector "objectAtIndex:" (nativeArray As Ptr, index As Integer) As Ptr
+    Private Function CopyStrings(nativeArray As Ptr) As Array Of String
+        Dim outputValue As Array Of String = []
+        If nativeArray = Nil Then Return outputValue
+        For i As Integer = 0 To ArrayCount(nativeArray) - 1
+            Array.Append(outputValue, NativeText(ArrayItem(nativeArray, i)))
+        Next
+        Return outputValue
+    End Function
+    Sequential Structure SpellRange
+        Location As Integer
+        Length As Integer
+    End Structure
+    Private Declare Function SharedChecker Lib "AppKit" Selector "sharedSpellChecker" (cls As Ptr) As Ptr
+    Private Declare Function AvailableLanguages Lib "AppKit" Selector "availableLanguages" (checker As Ptr) As Ptr
+    Private Declare Function DocumentTag Lib "AppKit" Selector "uniqueSpellDocumentTag" (cls As Ptr) As Integer
+    Private Declare Sub CloseDocument Lib "AppKit" Selector "closeSpellDocumentWithTag:" (checker As Ptr, tag As Integer)
+    Private Declare Function CheckText Lib "AppKit" Selector "checkSpellingOfString:startingAt:language:wrap:inSpellDocumentWithTag:wordCount:" (checker As Ptr, text As Ptr, offset As Integer, language As Ptr, wrap As UInt8, tag As Integer, ByRef words As Integer) As SpellRange
+    Private Declare Function GuessWords Lib "AppKit" Selector "guessesForWordRange:inString:language:inSpellDocumentWithTag:" (checker As Ptr, range As SpellRange, text As Ptr, language As Ptr, tag As Integer) As Ptr
+    Private Declare Function Substring Lib "Foundation" Selector "substringWithRange:" (text As Ptr, range As SpellRange) As Ptr
+    Private Declare Function TextLength Lib "Foundation" Selector "length" (text As Ptr) As Integer
+    Private Declare Function IsMain Lib "Foundation" Selector "isMainThread" (cls As Ptr) As UInt8
+    Private Sub RequireMain()
+        If IsMain(NativeClass("NSThread")) = 0 Then Throw New InvalidArgumentException("Spell checking requires the main thread")
+    End Sub
+#End If
+
+
+Public Class SpellingMatch
+    Private Property mStartUTF16 As Integer = 0
+    Public Property StartUTF16 As Integer
+        Get
+            Return Me.mStartUTF16
+        End Get
+    End Property
+    Private Property mLengthUTF16 As Integer = 0
+    Public Property LengthUTF16 As Integer
+        Get
+            Return Me.mLengthUTF16
+        End Get
+    End Property
+    Private Property mWord As String = ""
+    Public Property Word As String
+        Get
+            Return Me.mWord
+        End Get
+    End Property
+    Public Sub Constructor(startUTF16 As Integer, lengthUTF16 As Integer, word As String)
+        Me.mStartUTF16 = startUTF16
+        Me.mLengthUTF16 = lengthUTF16
+        Me.mWord = word
+    End Sub
+End Class
+
+Public Function SpellLanguages() As Array Of String
+    #If TargetMac Then
+        RequireMain()
+        Dim pool As Ptr = NewPool(NativeClass("NSAutoreleasePool"))
+        Try
+            Return CopyStrings(AvailableLanguages(SharedChecker(NativeClass("NSSpellChecker"))))
+        Finally
+            DrainPool(pool)
+        End Try
+    #Else
+        Throw New UnsupportedOperationException("Spell checking requires macOS")
+    #End If
+End Function
+
+Public Function FirstMisspelling(text As String, language As String = "") As Optional Of SpellingMatch
+    #If TargetMac Then
+        RequireMain()
+        Dim pool As Ptr = NewPool(NativeClass("NSAutoreleasePool"))
+        Dim inputText As CFStringRef = CType(text, CFStringRef)
+        Dim languageText As CFStringRef = CType(language, CFStringRef)
+        Dim checker As Ptr = SharedChecker(NativeClass("NSSpellChecker"))
+        Dim tag As Integer = DocumentTag(NativeClass("NSSpellChecker"))
+        Try
+            Dim languagePointer As Ptr = Nil
+            If language <> "" Then languagePointer = languageText
+            Dim words As Integer = 0
+            Dim range As SpellRange = CheckText(checker, inputText, 0, languagePointer, 0, tag, words)
+            If range.Length = 0 Or range.Location = 9223372036854775807 Then Return None
+            Return Some(New SpellingMatch(range.Location, range.Length, NativeText(Substring(inputText, range))))
+        Finally
+            CloseDocument(checker, tag)
+            ReleaseObject(inputText)
+            ReleaseObject(languageText)
+            DrainPool(pool)
+        End Try
+    #Else
+        Throw New UnsupportedOperationException("Spell checking requires macOS")
+    #End If
+End Function
+
+Public Function SpellingSuggestions(word As String, language As String = "", maximum As Integer = 12) As Array Of String
+    If String.Trim(word) = "" Then Throw New InvalidArgumentException("A word is required")
+    If maximum < 1 Or maximum > 100 Then Throw New InvalidArgumentException("Suggestion limit must be 1 through 100")
+    #If TargetMac Then
+        RequireMain()
+        Dim pool As Ptr = NewPool(NativeClass("NSAutoreleasePool"))
+        Dim inputText As CFStringRef = CType(word, CFStringRef)
+        Dim languageText As CFStringRef = CType(language, CFStringRef)
+        Dim checker As Ptr = SharedChecker(NativeClass("NSSpellChecker"))
+        Dim tag As Integer = DocumentTag(NativeClass("NSSpellChecker"))
+        Try
+            Dim languagePointer As Ptr = Nil
+            If language <> "" Then languagePointer = languageText
+            Dim range As SpellRange = { Location: 0, Length: TextLength(inputText) }
+            Dim guesses As Ptr = GuessWords(checker, range, inputText, languagePointer, tag)
+            Dim outputValue As Array Of String = []
+            For i As Integer = 0 To ArrayCount(guesses) - 1
+                If i >= maximum Then Exit For
+                Array.Append(outputValue, NativeText(ArrayItem(guesses, i)))
+            Next
+            Return outputValue
+        Finally
+            CloseDocument(checker, tag)
+            ReleaseObject(inputText)
+            ReleaseObject(languageText)
+            DrainPool(pool)
+        End Try
+    #Else
+        Throw New UnsupportedOperationException("Spell checking requires macOS")
+    #End If
+End Function
