@@ -1,4 +1,4 @@
-# Check spelling and request native suggestions
+# Native spelling and suggestions
 
 `Import spellcheck`. `SpellLanguages()` lists native languages. `FirstMisspelling(text, language = "")` returns Optional Of SpellingMatch, with Word, StartUTF16 and LengthUTF16. Offsets use Cocoa UTF-16 units, not UTF-8 byte positions. `SpellingSuggestions(word, language = "", maximum = 12)` returns up to the requested limit. Uses a temporary spell-document tag which is always closed. Never changes the selected system language, learned words, or ignored-word dictionary. Main thread required. Results depend on installed language dictionaries.
 
@@ -15,7 +15,7 @@ consumer project for reproducible installs.
 
 ## Example
 
-```buoy
+```basic
 Import spellcheck
 
 Sub Main()
